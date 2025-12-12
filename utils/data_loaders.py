@@ -24,7 +24,7 @@ def get_data_dir():
 # VISION DATASETS
 # ============================================================================
 
-def load_mnist(batch_size=64, val_split=0.1):
+def load_mnist(batch_size=64, val_split=0.1, transform=None):
     """
     Load MNIST dataset with train/val split.
     
@@ -35,10 +35,12 @@ def load_mnist(batch_size=64, val_split=0.1):
     Returns:
         train_loader, val_loader, test_loader
     """
-    transform = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize((0.1307,), (0.3081,))
-    ])
+
+    if transform is None:
+        transform = transforms.Compose([
+            transforms.ToTensor(),
+            #transforms.Normalize((0.1307,), (0.3081,))
+        ])
     
     data_dir = os.path.join(get_data_dir(), 'raw')
     
@@ -576,6 +578,127 @@ def generate_ecg_anomalies(num_normal=5000, num_anomalies=300, seq_length=200):
 # REAL-WORLD TIME SERIES DATASETS
 # ============================================================================
 
+def load_crypto_dataset(csv_path=None, seq_length=60, pred_length=1, batch_size=64, 
+                       target_col='Close', coin_filter=None):
+    """
+    Load Cryptocurrency Historical Prices dataset.
+    
+    Expects a CSV file manually downloaded from Kaggle:
+    https://www.kaggle.com/datasets/isaaclopgu/cryptocurrency-historical-prices-top-100-2025/data
+    
+    Args:
+        csv_path: Path to the csv file. If None, looks in default location.
+        seq_length: Input sequence length
+        pred_length: Prediction horizon
+        batch_size: Batch size
+        target_col: Column to predict (e.g. 'Close', 'Price')
+        coin_filter: List of coin symbols/names to include. If None, uses top 5 by volume or Bitcoin.
+        
+    Returns:
+        train_loader, val_loader, test_loader, num_features
+    """
+    import pandas as pd
+    from sklearn.preprocessing import StandardScaler
+    
+    if csv_path is None:
+        csv_path = os.path.join(get_data_dir(), 'raw', 'crypto_prices.csv')
+        
+    if not os.path.exists(csv_path):
+        raise FileNotFoundError(
+            f"Dataset not found at {csv_path}.\n"
+            "Download it from: https://www.kaggle.com/datasets/isaaclopgu/cryptocurrency-historical-prices-top-100-2025/data\n"
+            "And save it as 'crypto_prices.csv' in the 'data/raw' folder."
+        )
+        
+    print(f"Loading crypto data from {csv_path}...")
+    df = pd.read_csv(csv_path)
+    
+    # Basic cleaning - ensure Date is datetime and sorted
+    if 'Date' in df.columns:
+        df['Date'] = pd.to_datetime(df['Date'])
+        df = df.sort_values('Date')
+    
+    # Identify Coin Column (usually 'Name' or 'Symbol')
+    coin_col = None
+    for col in ['Symbol', 'Name', 'Coin']:
+        if col in df.columns:
+            coin_col = col
+            break
+            
+    # Filter coins
+    if coin_filter:
+        if coin_col:
+            df = df[df[coin_col].isin(coin_filter)]
+        else:
+            print("Warning: Could not find coin name column to filter by.")
+    elif coin_col:
+        # Default: Top 1 (usually Bitcoin) if too large, or just use all if manageable.
+        # Let's default to just 'BTC' or 'Bitcoin' if available to keep it simple, 
+        # unless user wants all.
+        unique_coins = df[coin_col].unique()
+        if 'BTC' in unique_coins:
+            df = df[df[coin_col] == 'BTC']
+        elif 'Bitcoin' in unique_coins:
+            df = df[df[coin_col] == 'Bitcoin']
+            
+    # Select target column
+    if target_col not in df.columns:
+        # Try finding a similar column
+        candidates = [c for c in df.columns if 'close' in c.lower() or 'price' in c.lower()]
+        if candidates:
+            target_col = candidates[0]
+            print(f"Target column '{target_col}' not found. Using '{target_col}' instead.")
+        else:
+            raise ValueError(f"Target column '{target_col}' not found in dataset.")
+            
+    data = df[target_col].values.reshape(-1, 1)
+    
+    # Split
+    num_samples = len(data)
+    train_end = int(0.7 * num_samples)
+    val_end = int(0.85 * num_samples)
+    
+    train_data = data[:train_end]
+    val_data = data[train_end:val_end]
+    test_data = data[val_end:]
+    
+    # Normalize
+    scaler = StandardScaler()
+    train_data = scaler.fit_transform(train_data)
+    # Note: Transforming val/test with train scaler
+    val_data = scaler.transform(val_data)
+    test_data = scaler.transform(test_data)
+    
+    # Create sequences
+    def create_sequences(dat, seq_len, pred_len):
+        X, Y = [], []
+        for i in range(len(dat) - seq_len - pred_len + 1):
+            X.append(dat[i:i+seq_len])
+            Y.append(dat[i+seq_len:i+seq_len+pred_len])
+        return np.array(X), np.array(Y)
+    
+    X_train, Y_train = create_sequences(train_data, seq_length, pred_length)
+    X_val, Y_val = create_sequences(val_data, seq_length, pred_length)
+    X_test, Y_test = create_sequences(test_data, seq_length, pred_length)
+    
+    # Convert to tensors
+    # Check if data is empty
+    if len(X_train) == 0:
+        raise ValueError("Resulting dataset is empty. Check your coin selection or sequence length.")
+
+    train_dataset = TensorDataset(torch.FloatTensor(X_train), torch.FloatTensor(Y_train))
+    val_dataset = TensorDataset(torch.FloatTensor(X_val), torch.FloatTensor(Y_val))
+    test_dataset = TensorDataset(torch.FloatTensor(X_test), torch.FloatTensor(Y_test))
+    
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+    
+    num_features = 1 # Univariate for now
+    
+    return train_loader, val_loader, test_loader, num_features
+
+
 def load_ett_dataset(dataset_name='ETTh1', seq_length=96, pred_length=24, batch_size=32):
     """
     Load Electricity Transformer Temperature (ETT) dataset.
@@ -771,15 +894,14 @@ def load_air_quality_uci(seq_length=48, pred_length=12, batch_size=32):
 # REAL-WORLD ANOMALY DETECTION DATASETS
 # ============================================================================
 
-def load_kddcup99(sample_size=None, batch_size=64):
+def load_nsl_kdd(batch_size=64):
     """
-    Load KDD Cup 99 network intrusion detection dataset.
+    Load NSL-KDD network intrusion detection dataset.
     
-    Classic anomaly detection benchmark. Contains network connection records
+    Improved version of KDD Cup 99. Contains network connection records
     labeled as normal or various types of attacks.
     
     Args:
-        sample_size: If specified, randomly sample this many records (for faster testing)
         batch_size: Batch size
         
     Returns:
@@ -787,22 +909,28 @@ def load_kddcup99(sample_size=None, batch_size=64):
     """
     import pandas as pd
     from sklearn.preprocessing import LabelEncoder, StandardScaler
-    from sklearn.model_selection import train_test_split
     
-    data_dir = os.path.join(get_data_dir(), 'raw')
+    data_dir = os.path.join(get_data_dir(), 'raw', 'nsl_kdd')
     os.makedirs(data_dir, exist_ok=True)
     
-    file_path = os.path.join(data_dir, 'kddcup.data.gz')
+    train_url = 'https://raw.githubusercontent.com/defcom17/NSL_KDD/master/KDDTrain%2B.txt'
+    test_url = 'https://raw.githubusercontent.com/defcom17/NSL_KDD/master/KDDTest%2B.txt'
+    
+    train_path = os.path.join(data_dir, 'KDDTrain+.txt')
+    test_path = os.path.join(data_dir, 'KDDTest+.txt')
     
     # Download if not exists
-    if not os.path.exists(file_path):
+    if not os.path.exists(train_path) or not os.path.exists(test_path):
         import requests
-        print('Downloading KDD Cup 99 dataset (takes a few minutes)...')
-        url = 'http://kdd.ics.uci.edu/databases/kddcup99/kddcup.data.gz'
-        response = requests.get(url, stream=True)
-        with open(file_path, 'wb') as f:
-            for chunk in response.iter_content(chunk_size=8192):
-                f.write(chunk)
+        print('Downloading NSL-KDD dataset...')
+        
+        for url, path in [(train_url, train_path), (test_url, test_path)]:
+            if not os.path.exists(path):
+                print(f'Downloading {os.path.basename(path)}...')
+                response = requests.get(url)
+                with open(path, 'wb') as f:
+                    f.write(response.content)
+                    
         print('Download complete!')
     
     # Column names
@@ -816,38 +944,43 @@ def load_kddcup99(sample_size=None, batch_size=64):
         'srv_diff_host_rate', 'dst_host_count', 'dst_host_srv_count',
         'dst_host_same_srv_rate', 'dst_host_diff_srv_rate', 'dst_host_same_src_port_rate',
         'dst_host_srv_diff_host_rate', 'dst_host_serror_rate', 'dst_host_srv_serror_rate',
-        'dst_host_rerror_rate', 'dst_host_srv_rerror_rate', 'label'
+        'dst_host_rerror_rate', 'dst_host_srv_rerror_rate', 'label', 'difficulty'
     ]
     
     # Load data
-    df = pd.read_csv(file_path, names=column_names, compression='gzip')
-    
-    # Sample if requested
-    if sample_size and sample_size < len(df):
-        df = df.sample(n=sample_size, random_state=42)
+    train_df = pd.read_csv(train_path, names=column_names)
+    test_df = pd.read_csv(test_path, names=column_names)
     
     # Binary labels: normal vs attack
-    df['is_attack'] = (df['label'] != 'normal.').astype(int)
+    train_df['is_attack'] = (train_df['label'] != 'normal').astype(int)
+    test_df['is_attack'] = (test_df['label'] != 'normal').astype(int)
     
     # Separate features and labels
-    y = df['is_attack'].values
-    X = df.drop(columns=['label', 'is_attack'])
+    y_train = train_df['is_attack'].values
+    y_test = test_df['is_attack'].values
+    
+    # Drop label and difficulty (last 2 cols)
+    X_train = train_df.drop(columns=['label', 'difficulty', 'is_attack'])
+    X_test = test_df.drop(columns=['label', 'difficulty', 'is_attack'])
     
     # Encode categorical features
+    # Ensure consistent encoding between train and test
     categorical_cols = ['protocol_type', 'service', 'flag']
-    label_encoders = {}
+    
+    # Combine for encoding to handle categories present in test but not train (rare but possible)
+    # or just fit on combined unique values
     
     for col in categorical_cols:
         le = LabelEncoder()
-        X[col] = le.fit_transform(X[col].astype(str))
-        label_encoders[col] = le
+        # Fit on both to catch all categories
+        all_cats = pd.concat([X_train[col], X_test[col]], axis=0).astype(str)
+        le.fit(all_cats)
+        
+        X_train[col] = le.transform(X_train[col].astype(str))
+        X_test[col] = le.transform(X_test[col].astype(str))
     
-    X = X.values.astype(np.float32)
-    
-    # Split data
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.3, random_state=42, stratify=y
-    )
+    X_train = X_train.values.astype(np.float32)
+    X_test = X_test.values.astype(np.float32)
     
     # Normalize
     scaler = StandardScaler()
@@ -867,8 +1000,9 @@ def load_kddcup99(sample_size=None, batch_size=64):
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
     
-    feature_names = list(X.columns) if hasattr(X, 'columns') else column_names[:-1]
+    feature_names = list(train_df.drop(columns=['label', 'difficulty', 'is_attack']).columns)
     
+    return train_loader, test_loader, feature_names
     return train_loader, test_loader, feature_names
 
 
@@ -900,7 +1034,7 @@ def load_creditcard_fraud(sample_size=None, batch_size=64):
     if not os.path.exists(file_path):
         raise FileNotFoundError(
             f"Credit Card dataset not found at {file_path}\n"
-            "Please download from: https://www.kaggle.com/datasets/mlg-ulb/creditcardfraud\n"
+            "Download from: https://www.kaggle.com/datasets/mlg-ulb/creditcardfraud\n"
             "Place creditcard.csv in data/raw/"
         )
     

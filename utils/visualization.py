@@ -122,3 +122,126 @@ def plot_attention_weights(attention_weights, save_path=None):
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
     
     plt.show()
+
+
+def visualize_batch(images, nrow=8, title=None, save_path=None, denormalize=True, show=True):
+    """
+    Visualize a batch of images in a grid.
+    
+    Args:
+        images: Tensor of shape (B, C, H, W)
+        nrow: Number of images per row
+        title: Optional title for the plot
+        save_path: Optional path to save the figure
+        denormalize: If True, scales [-1, 1] data to [0, 1]
+    """
+    if denormalize:
+        images = (images + 1) / 2.0
+        images = torch.clamp(images, 0, 1)
+        
+    # Convert to specific format for plotting
+    if images.dim() == 4:
+        # If single channel (B, 1, H, W) -> (B, H, W)
+        if images.shape[1] == 1:
+            images = images.squeeze(1)
+        # If RGB (B, 3, H, W) -> (B, H, W, 3)
+        elif images.shape[1] == 3:
+            images = images.permute(0, 2, 3, 1)
+            
+    images = images.cpu().detach().numpy()
+    
+    # Calculate grid dimensions
+    batch_size = len(images)
+    n_rows = (batch_size + nrow - 1) // nrow
+    
+    fig, axes = plt.subplots(n_rows, nrow, figsize=(nrow * 1.5, n_rows * 1.5))
+    if title:
+        fig.suptitle(title)
+        
+    # Handle single row case
+    if n_rows == 1:
+        if nrow == 1:
+             axes = np.array([axes])
+        else:
+             axes = axes.reshape(1, -1)
+    elif nrow == 1:
+        axes = axes.reshape(-1, 1)
+        
+    axes = axes.ravel()
+    
+    for i in range(len(axes)):
+        if i < batch_size:
+            if images[i].ndim == 2: # Grayscale
+                axes[i].imshow(images[i], cmap='gray')
+            else: # RGB
+                axes[i].imshow(images[i])
+            axes[i].axis('off')
+        else:
+            axes[i].axis('off')
+            
+    plt.tight_layout()
+    
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    
+    if show:
+        plt.show()
+
+
+def visualize_reconstruction(real_images, recon_images, num_samples=5, save_path=None, denormalize=True):
+    """
+    Visualize original vs reconstructed images side by side.
+    
+    Args:
+        real_images: Batch of original images
+        recon_images: Batch of reconstructed images
+        num_samples: Number of samples to visualize
+        save_path: Optional path to save the figure
+        denormalize: If True, scales [-1, 1] data to [0, 1]
+    """
+    # Helper to process images
+    def process_imgs(imgs):
+        if denormalize:
+            imgs = (imgs + 1) / 2.0
+            imgs = torch.clamp(imgs, 0, 1)
+        return imgs.cpu().detach()
+
+    real_images = process_imgs(real_images)
+    recon_images = process_imgs(recon_images)
+    
+    num_samples = min(num_samples, len(real_images))
+    
+    fig, axes = plt.subplots(2, num_samples, figsize=(num_samples * 2, 4))
+    
+    # Handle case where num_samples is 1 (axes is 1D array)
+    if num_samples == 1:
+        axes = axes.reshape(2, 1)
+
+    for i in range(num_samples):
+        # Original
+        if real_images.shape[1] == 1:
+            img_real = real_images[i].squeeze()
+            axes[0, i].imshow(img_real, cmap='gray')
+        else:
+            img_real = real_images[i].permute(1, 2, 0)
+            axes[0, i].imshow(img_real)
+        axes[0, i].set_title("Original")
+        axes[0, i].axis('off')
+        
+        # Reconstructed
+        if recon_images.shape[1] == 1:
+            img_recon = recon_images[i].squeeze()
+            axes[1, i].imshow(img_recon, cmap='gray')
+        else:
+            img_recon = recon_images[i].permute(1, 2, 0)
+            axes[1, i].imshow(img_recon)
+        axes[1, i].set_title("Reconstructed")
+        axes[1, i].axis('off')
+        
+    plt.tight_layout()
+    
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        
+    plt.show()
+
