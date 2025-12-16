@@ -1,6 +1,6 @@
 # Deep Learning Architectures Study
 
-This repository is a collection of toy implementations of State-of-the-Art (SOTA) deep learning architectures.
+This repository is a collection of toy implementations of foundational and State-of-the-Art (SOTA) deep learning architectures.
 
 The primary goal of this project is education. I am implementing these architectures from scratch to study the underlying mathematics, design decisions, and mechanics of how these architectures work. My aim is to bridge the gap between theory and code, making the abstract math of the architectures clearer by building the structures myself. I found this approach to be very helpful in understanding the architectures better.
 
